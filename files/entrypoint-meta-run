@@ -1,0 +1,84 @@
+#!/bin/bash
+
+# This script is intended to be run in the host environment to start
+# the dev container. It can be output by the entrypoint to be eval'ed
+# in the host environment.
+
+# Run in a subshell to prevent polluting parent shell this may be eval'ed in
+(
+    set -euo pipefail
+    # This script is intended to be run in the host environment to start a container
+    # with the current user and group, and mount the current directory as /workspace.
+    uid=$(id -u)
+    gid=$(id -g)
+    username="$(id -un)"
+    groupname="$(id -gn)"
+    homedir=/home/"${username}" # TODO: Use host's home dir location?
+
+    # Store cmd in a variable, then exec it at the end
+    cmd="docker run"
+
+    # TODO: Name the container based on the local dir, use name to decide if to re-run or exec, etc
+    # Similar to Docker Compose
+
+    # We want to remove the container (TODO: future - make persistent with a name?)
+    cmd+=" --rm"
+
+    # It runs as a terminal (TODO: detect if we want this option based on current env?)
+    cmd+=" --interactive"
+    cmd+=" --tty"
+
+    # Mount the .ssh dir if present
+    if [[ -d "$HOME/.ssh" ]]; then
+        cmd+=" --mount type=bind,source=${HOME}/.ssh,target=${homedir}/.ssh"
+    fi
+
+    # Mount the git config if present
+    if [[ -f "$HOME/.gitconfig" ]]; then
+        cmd+=" --mount type=bind,source=${HOME}/.gitconfig,target=${homedir}/.gitconfig"
+    fi
+    # Mount the git config dir if present
+    if [[ -d "$HOME/.config/git" ]]; then
+        cmd+=" --mount type=bind,source=${HOME}/.config/git,target=${homedir}/.config/git"
+    fi
+
+    # If we detect a .git file (TODO: Other file types, assume we're in a dev container proj)
+    # Create a .corp-dev-container folder to store some dev container state, e.g. bash_history
+    if [[ -d .git ]]; then
+        # Create dir if needed
+        mkdir -p .corp-dev-container/state
+
+        # Mount bash_history / set env var
+        cmd+=" --mount type=bind,source=$(pwd)/.corp-dev-container/state,target=${homedir}/.corp-dev-container/state"
+        cmd+=" --env CORP_DEV_CONTAINER_STATE_DIR=${homedir}/.corp-dev-container/state"
+    fi
+
+    # Mount the local dir in /workspace
+    cmd+=" --mount type=bind,source=$(pwd),target=/workspace"
+
+    # And set it as the workdir
+    cmd+=" --workdir /workspace"
+
+    # Hostname based on current dir
+    cmd+=" --hostname $(basename "$(pwd)")" # TODO: Sanitise
+
+    # Mount as correct user
+    cmd+=" --user ${uid}:${gid}"
+
+    # Pass username/groupname as env vars
+    cmd+=" --env DEV_USERNAME=${username}"
+    cmd+=" --env DEV_GROUPNAME=${groupname}"
+    cmd+=" --env DEV_HOMEDIR=${homedir}"
+
+    # Finish the run args with the image name
+    cmd+=" corp-dev-container:local"
+
+    # Now the cmd/args to the image entrypoint
+    # cmd+=" \"\$@\""
+
+    # Execute the command string we built inside the current shell
+    # This will be run in the host environment to bootstrap the container
+    # with a set of good commandline options
+
+    $cmd
+)

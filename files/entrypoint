@@ -1,0 +1,98 @@
+#!/bin/bash
+set -euo pipefail
+
+script_dir="/opt/corp-dev-container"
+
+# Create an option so the entrypoint can be called like
+# eval "$(docker run --rm corp-dev-container:local --run)" which will
+# return a script to run in the host environment, e.g. to help with
+# calling itself with appropriate env vars and mounts.
+#
+# For now only detect '--run' and return an embedded shell script
+# that calls docker run on this image.
+
+# The image name will be a constant we can update (TODO: Future script can override it)
+CDC_IMAGE="corp-dev-container:local"
+
+if [[ "$1" == "--run" ]]; then
+    cat "$script_dir/entrypoint-meta-run"
+    exit 0
+fi
+
+# Run the entrypoint in its usual mode to run commands
+
+# The user and group details are hardcoded here, but could also be passed as environment variables.
+# Set them from env variables if provided
+
+DEV_USERNAME="${DEV_USERNAME:-devuser}"
+DEV_GROUPNAME="${DEV_GROUPNAME:-$DEV_USERNAME}"
+DEV_HOMEDIR="${DEV_HOMEDIR:-/home/$DEV_USERNAME}"
+
+# Get the UID and GID of the user running the container
+# Docker passes this user's UID:GID when using the --user flag.
+# If no --user flag, this will be root (0:0).
+RUNNING_UID=$(id -u)
+RUNNING_GID=$(id -g)
+
+# Check that the running user is not root, since we only want to run
+# this container as a non-root dev user for safety - and to avoid
+# messing up the permissions of the file.
+if [[ "$RUNNING_UID" -eq 0 ]] && [[ "$RUNNING_GID" -eq 0 ]]; then
+    echo "This container should not be run as root. Please use a non-root user."
+    exit 1
+fi
+
+# A default place to mount files - could make this configurable
+WORKSPACE_DIR=/workspace
+
+# Check the directory first, if it exists.
+if [[ ! -d "$WORKSPACE_DIR" ]]; then
+    WORKSPACE_DIR_UID_GID=$(stat -c "%u:%g" "$WORKSPACE_DIR" 2>/dev/null)
+    if [[ "${DEV_ALLOW_WORKSPACE_USER_MISMATCH:-}" != "true" ]] && [[ -"$WORKSPACE_DIR_UID_GID" != "$RUNNING_UID:$RUNNING_GID" ]]; then
+        echo "Workspace directory '$WORKSPACE_DIR' must be owned by the current user (UID: $RUNNING_UID, GID: $RUNNING_GID)."
+        echo "This container cannot be run with a different user because we don't want to use the wrong user in the workspace files."
+        echo "Please run the container with a user that matches the workspace directory, i.e. --user $WORKSPACE_DIR_UID_GID"
+        echo "To override this, set DEV_ALLOW_WORKSPACE_USER_MISMATCH=true in the container environment."
+        exit 1
+    fi
+fi
+
+# Now check a file, if the workspace dir and a file in the dir exist.
+if [[ -d "$WORKSPACE_DIR" ]] && [[ -n "$(ls -A "$WORKSPACE_DIR")" ]]; then
+    # Get the first file in the directory
+    workspace_file=$(ls "$WORKSPACE_DIR" | head -n 1)
+    workspace_file_path="$WORKSPACE_DIR/$workspace_file"
+
+    # Get the uid/gid of that file
+    WORKSPACE_FILE_UID_GID=$(stat -c "%u:%g" "$workspace_file_path")
+    if [[ "${DEV_ALLOW_WORKSPACE_USER_MISMATCH:-}" != "true" ]] && [[ "$WORKSPACE_FILE_UID_GID" != "$RUNNING_UID:$RUNNING_GID" ]]; then
+        echo "Workspace file '$workspace_file_path' must be owned by the current user (UID: $RUNNING_UID, GID: $RUNNING_GID)."
+        echo "This container cannot be run with a different user because we don't want to use the wrong user in the workspace files."
+        echo "Please run the container with a user that matches the workspace file, i.e. --user $WORKSPACE_FILE_UID_GID"
+        echo "To override this, set DEV_ALLOW_WORKSPACE_USER_MISMATCH=true in the container environment."
+        exit 1
+    fi
+fi
+
+# Create the dev user, if needed. The script is idempotent so should
+# only do something when the container first starts, or if the user
+# changes.
+sudo /opt/corp-dev-container/prepare-dev-user \
+    "$RUNNING_UID" "$DEV_USERNAME" \
+    "$RUNNING_GID" "$DEV_GROUPNAME" \
+    "$DEV_HOMEDIR"
+
+# Prepare dev user's files if needed - run in a login shell to ensure
+# $HOME, etc are correct
+sudo -u "$DEV_USERNAME" bash --login -c '/opt/corp-dev-container/prepare-dev-files "'$DEV_HOMEDIR'"'
+
+# We want to respect the container's workdir - unless the current dir is
+# the old dev user's homedir, in which case, change directory to the new
+# home directory, because that is probably what the user wants.
+if [[ "$PWD" == "$HOME" ]]; then
+    cd "$DEV_HOMEDIR"
+fi
+
+# Run in 'bash -l' to simulate a login
+# We do this in case we created/changed the user (could check and skip)
+exec sudo -u "$DEV_USERNAME" bash --login -c 'exec "$@"' -- "$@"

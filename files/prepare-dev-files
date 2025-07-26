@@ -1,0 +1,82 @@
+#!/bin/bash
+set -euo pipefail
+
+# This script initialises the files in the dev user's home directory.
+# Once the files have been created a file called .devfiles is created
+# which shows that the script has already run. On repeated calls, it
+# does nothing.
+
+HOMEDIR="$1"
+
+### LOGGING ###
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+log() {
+    # echo -e "${GREEN}[prepare-dev-user]${NC} $1"
+    true
+}
+
+warn() {
+    echo -e "${YELLOW}[prepare-dev-user]${NC} $1"
+}
+
+error() {
+    echo -e "${RED}[prepare-dev-user]${NC} $1" >&2
+}
+
+### ARG VALIDATION ###
+
+# Make sure the homedir exists
+if [[ -z "$HOMEDIR" ]] || [[ ! -d "$HOMEDIR" ]]; then
+    error "Home directory must be specified and must exist"
+    exit 1
+fi
+
+# Check the homedir user matches the current user
+if [[ "$(stat -c %u "$HOMEDIR")" != "$(id -u)" ]] || [[ "$(stat -c %g "$HOMEDIR")" != "$(id -g)" ]]; then
+    error "Home directory '$HOMEDIR' must be owned by the current user (UID:$(id -u), GID:$(id -g))"
+    exit 1
+fi
+
+# Now check if the .devfiles file exists - exit with success if so, because
+# that means the script has already run
+if [[ -f "$HOMEDIR/.devfiles" ]]; then
+    log "Dev files already prepared in '$HOMEDIR'. Exiting."
+    exit 0
+fi
+
+#### MAIN LOGIC TO PREPARE FILES ####
+
+export MISE_DATA_DIR=/usr/local/share/mise/
+
+# Install our builtin versions
+mise use -g python@3.13.5 > /dev/null
+mise use -g node@24.4.1 > /dev/null
+
+cat <<EOF >> "$HOMEDIR/.bashrc"
+# mise
+export MISE_DATA_DIR="${MISE_DATA_DIR}"
+eval "\$(mise activate bash)"
+
+# AWS
+complete -C /usr/local/bin/aws_completer aws
+
+# If ~/.corp-dev-container/state folder exists then state may be
+# stored between container invocations in this folder.
+# - bash_history file
+if [[ -d "\${HOME}/.corp-dev-container/state" ]]; then
+    export CORP_DEV_CONTAINER_STATE_DIR="\${HOME}/.corp-dev-container/state"
+    export HISTFILE="\${CORP_DEV_CONTAINER_STATE_DIR}/bash_history"
+fi
+EOF
+
+# Disable initial message about sudo, etc, since we use sudo in these
+# scripts and we want those to be silent
+touch "$HOMEDIR/.hushlogin"
+
+# End of script - create file to show completed
+touch "$HOMEDIR/.devfiles"

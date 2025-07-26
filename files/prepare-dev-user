@@ -1,0 +1,149 @@
+#!/bin/bash
+set -euo pipefail
+# set -x
+
+REQUIRED_UID="$1"
+REQUIRED_USERNAME="$2"
+REQUIRED_GID="$3"
+REQUIRED_GROUPNAME="$4"
+REQUIRED_HOMEDIR="$5"
+
+### LOGGING ###
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+log() {
+    # echo -e "${GREEN}[prepare-dev-user]${NC} $1"
+    true
+}
+
+warn() {
+    echo -e "${YELLOW}[prepare-dev-user]${NC} $1"
+}
+
+error() {
+    echo -e "${RED}[prepare-dev-user]${NC} $1" >&2
+}
+
+### ARG VALIDATION ###
+
+# Check if we're running as root or with sudo
+if [[ $EUID -ne 0 ]]; then
+    error "This script must be run as root or with sudo"
+    exit 1
+fi
+
+# Validate inputs
+if ! [[ "$REQUIRED_UID" =~ ^[0-9]+$ ]] || ! [[ "$REQUIRED_GID" =~ ^[0-9]+$ ]]; then
+    error "UID and GID must be numeric"
+    exit 1
+fi
+
+if [[ -z "$REQUIRED_USERNAME" ]]; then
+    error "Username cannot be empty"
+    exit 1
+fi
+
+### LOGIC ###
+
+log "Setting up user '$REQUIRED_USERNAME' (UID:$REQUIRED_UID), group '$REQUIRED_GROUPNAME' (GID:$REQUIRED_GID) if needed."
+
+USERNAME_FOR_UID=$(getent passwd "$REQUIRED_UID" 2>/dev/null | cut -d: -f1 || echo "")
+UID_FOR_USERNAME=$(getent passwd "$REQUIRED_USERNAME" 2>/dev/null | cut -d: -f3 || echo "")
+GROUPNAME_FOR_GID=$(getent group "$REQUIRED_GID" 2>/dev/null | cut -d: -f1 || echo "")
+GID_FOR_GROUPNAME=$(getent group "$REQUIRED_GROUPNAME" 2>/dev/null | cut -d: -f3 || echo "")
+GID_FOR_UID=$(getent passwd "$REQUIRED_UID" 2>/dev/null | cut -d: -f4 || echo "")
+HOMEDIR_FOR_UID=$(getent passwd "$REQUIRED_UID" 2>/dev/null | cut -d: -f6 || echo "")
+HOMEDIR_LOCATION=$([[ -n "$HOMEDIR_FOR_UID" ]] && [[ -d "$HOMEDIR_FOR_UID" ]] && echo "$HOMEDIR_FOR_UID" || echo "")
+HOMEDIR_OWNER=$([[ -d "$REQUIRED_HOMEDIR" ]] && stat -c %u:%g "$REQUIRED_HOMEDIR" || echo "")
+
+# Log debug info so far
+log "Existing user with UID: $USERNAME_FOR_UID"
+log "Existing UID with username: $UID_FOR_USERNAME"
+log "Existing group with GID: $GROUPNAME_FOR_GID"
+log "Existing GID with groupname: $GID_FOR_GROUPNAME"
+log "Existing GID for UID: $GID_FOR_UID"
+log "Existing home dir files: $HOMEDIR_LOCATION"
+log "Existing home dir for UID: $HOMEDIR_FOR_UID"
+log "Existing home dir owner: $HOMEDIR_OWNER"
+
+#USER_GID=$([[ -n "$USERNAME_FOR_UID" ]] && [[ "$USERNAME_FOR_UID" == "$TARGET_USERNAME" ]] && id -g "$TARGET_USERNAME" 2>/dev/null || echo "")
+
+# If all of these are set up correctly - exit with success (idempotent - nothing to change)
+if [[ "$USERNAME_FOR_UID" == "$REQUIRED_USERNAME" ]] && \
+   [[ "$UID_FOR_USERNAME" == "$REQUIRED_UID" ]] && \
+   [[ "$GROUPNAME_FOR_GID" == "$REQUIRED_GROUPNAME" ]] && \
+   [[ "$GID_FOR_GROUPNAME" == "$REQUIRED_GID" ]] && \
+   [[ "$GID_FOR_UID" == "$REQUIRED_GID" ]] && \
+   [[ "$HOMEDIR_FOR_UID" == "$REQUIRED_HOMEDIR" ]] && \
+   [[ "$HOMEDIR_LOCATION" == "$REQUIRED_HOMEDIR" ]] && \
+   [[ "$HOMEDIR_OWNER" == "$REQUIRED_UID:$REQUIRED_GID" ]]; then
+    log "User '$REQUIRED_USERNAME' with UID:$REQUIRED_UID and GID:$REQUIRED_GID is already set up correctly."
+    exit 0
+fi
+
+# If any existing user/groups with username - exit with error, this generally doesn't happen and it complicates our logic so don't worry for now
+if [[ -n "$UID_FOR_USERNAME" ]] && [[ "$UID_FOR_USERNAME" != "$REQUIRED_UID" ]]; then
+    error "User $UID_FOR_USERNAME with the name '$REQUIRED_USERNAME' already exists with different UID/GID. This script doesn't support changing UIDs of existing users. Please choose a different username."
+    exit 1
+fi
+if [[ -n "$GID_FOR_GROUPNAME" ]] && [[ "$GID_FOR_GROUPNAME" != "$REQUIRED_GID" ]]; then
+    error "Group $GID_FOR_GROUPNAME with the name '$REQUIRED_GROUPNAME' already exists with different GID. This script doesn't support changing GIDs of existing groups yet. Please choose a different group name."
+    exit 1
+fi
+
+# If no existing group with uid - create one
+if [[ -z "$GROUPNAME_FOR_GID" ]]; then
+    log "Creating group '$REQUIRED_GROUPNAME' with GID $REQUIRED_GID"
+    groupadd -g "$REQUIRED_GID" "$REQUIRED_GROUPNAME"
+    GROUPNAME_FOR_GID="$REQUIRED_GROUPNAME"
+fi
+# If existing group with gid has wrong groupname - fix it
+if [[ "$GROUPNAME_FOR_GID" != "$REQUIRED_GROUPNAME" ]]; then
+    log "Changing group name from '$GROUPNAME_FOR_GID' to '$REQUIRED_GROUPNAME' (GID $REQUIRED_GID)"
+    groupmod -n "$REQUIRED_GROUPNAME" "$GROUPNAME_FOR_GID"
+    GROUPNAME_FOR_GID="$REQUIRED_GROUPNAME"
+fi
+
+# If no existing user with uid - create one, linking to gid
+if [[ -z "$USERNAME_FOR_UID" ]]; then
+    log "Creating user '$REQUIRED_USERNAME' with UID $REQUIRED_UID and GID $REQUIRED_GID"
+    useradd -m -u "$REQUIRED_UID" -g "$GROUPNAME_FOR_GID" -s /bin/bash "$REQUIRED_USERNAME"
+    USERNAME_FOR_UID="$REQUIRED_USERNAME"
+fi
+# If existing user with uid has wrong username - fix it
+if [[ "$USERNAME_FOR_UID" != "$REQUIRED_USERNAME" ]]; then
+    log "Changing username from '$USERNAME_FOR_UID' to '$REQUIRED_USERNAME' (UID $REQUIRED_UID)"
+    usermod -l "$REQUIRED_USERNAME" "$USERNAME_FOR_UID"
+    USERNAME_FOR_UID="$REQUIRED_USERNAME"
+fi
+
+# If user with uid has different gid - fix it (may be correct already or if user just created above)
+if [[ "$GID_FOR_UID" != "$REQUIRED_GID" ]]; then
+    log "Changing group of user '$REQUIRED_USERNAME' to '$REQUIRED_GROUPNAME' (GID $REQUIRED_GID)"
+    usermod -g "$REQUIRED_GROUPNAME" "$REQUIRED_USERNAME"
+fi
+
+# If there's no homedir at the right spot yet, and the uid has one elsewhere - move it
+if [[ ! -d "$REQUIRED_HOMEDIR" ]] && [[ -n "$HOMEDIR_LOCATION" ]] && [[ "$HOMEDIR_LOCATION" != "$REQUIRED_HOMEDIR" ]]; then
+    log "Moving existing home directory from '$HOMEDIR_LOCATION' to '$REQUIRED_HOMEDIR'"
+    mv "$HOMEDIR_LOCATION" "$REQUIRED_HOMEDIR"
+    HOMEDIR_LOCATION="$REQUIRED_HOMEDIR"
+fi
+
+# If there's a dir at the target location with the wrong owner - fix it up
+if [[ -d "$REQUIRED_HOMEDIR" ]] && [[ "$HOMEDIR_OWNER" != "$REQUIRED_UID:$REQUIRED_GID" ]]; then
+    log "Changing ownership of home directory '$REQUIRED_HOMEDIR' to $REQUIRED_UID:$REQUIRED_GID"
+    chown -R "$REQUIRED_UID:$REQUIRED_GID" "$REQUIRED_HOMEDIR"
+    HOMEDIR_OWNER="$REQUIRED_UID:$REQUIRED_GID"
+fi
+
+# If the user entry for the uid has an incorrect homedir - fix it up
+if [[ -z "$HOMEDIR_FOR_UID" ]] || [[ "$HOMEDIR_FOR_UID" != "$REQUIRED_HOMEDIR" ]]; then
+    log "Setting home directory for user '$REQUIRED_USERNAME' to '$REQUIRED_HOMEDIR'"
+    usermod -d "$REQUIRED_HOMEDIR" "$REQUIRED_USERNAME"
+    HOMEDIR_FOR_UID="$REQUIRED_HOMEDIR"
+fi
