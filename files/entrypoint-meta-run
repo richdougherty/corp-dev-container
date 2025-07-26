@@ -15,8 +15,17 @@
     groupname="$(id -gn)"
     homedir=/home/"${username}" # TODO: Use host's home dir location?
 
+    # Override with CORP_DEV_CONTAINER_IMAGE, otherwise default
+    image="${CORP_DEV_CONTAINER_IMAGE:-richdougherty/corp-dev-container:0.1.0}"
+
+
     # Store cmd in a variable, then exec it at the end
     cmd="docker run"
+
+    # Override with CORP_DEV_CONTAINER_PLATFORM if set, otherwise no arg
+    if [[ -n "${CORP_DEV_CONTAINER_PLATFORM:-}" ]]; then
+        cmd+=" --platform ${CORP_DEV_CONTAINER_PLATFORM}"
+    fi
 
     # TODO: Name the container based on the local dir, use name to decide if to re-run or exec, etc
     # Similar to Docker Compose
@@ -71,7 +80,7 @@
     cmd+=" --env DEV_HOMEDIR=${homedir}"
 
     # Finish the run args with the image name
-    cmd+=" corp-dev-container:local"
+    cmd+=" ${image}"
 
     # Now the cmd/args to the image entrypoint
     # cmd+=" \"\$@\""

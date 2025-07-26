@@ -5,15 +5,7 @@ corporate environment - all you need is Docker.
 
 Go to your project directory and start the container with:
 ```sh
-eval "$(docker run --rm corp-dev-container:<version> --run)"
-```
-
-## Building locally
-
-Required for now, as no images are published.
-
-```sh
-docker build . -t corp-dev-container:local
+eval "$(docker run --rm richdougherty/corp-dev-container:0.1.0 --run)"
 ```
 
 ## Features

@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir="/opt/corp-dev-container"
 
 # Create an option so the entrypoint can be called like
-# eval "$(docker run --rm corp-dev-container:local --run)" which will
+# eval "$(docker run --rm corp-dev-container:<version> --run)" which will
 # return a script to run in the host environment, e.g. to help with
 # calling itself with appropriate env vars and mounts.
 #
@@ -12,8 +12,6 @@ script_dir="/opt/corp-dev-container"
 # that calls docker run on this image.
 
 # The image name will be a constant we can update (TODO: Future script can override it)
-CDC_IMAGE="corp-dev-container:local"
-
 if [[ "$1" == "--run" ]]; then
     cat "$script_dir/entrypoint-meta-run"
     exit 0

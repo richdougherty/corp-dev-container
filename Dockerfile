@@ -1,7 +1,5 @@
-ARG UBUNTU_IMAGE_TAG="plucky-20250714"
-
 # Build a minimal Ubuntu to let us download and install other packages
-FROM ubuntu:${UBUNTU_IMAGE_TAG} AS ubuntu-min-packages
+FROM ubuntu:plucky-20250714 AS ubuntu-min-packages
 RUN \
   --mount=type=cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -25,8 +23,8 @@ RUN \
   gpg --dearmor -o /apt-config/keyrings/mise.gpg /tmp/mise.gpg.asc && \
   gpg --dearmor -o /apt-config/keyrings/kubernetes.gpg /tmp/kubernetes.gpg.asc && \
   mkdir -p /apt-config/sources.list.d && \
-  DEBIAN_ARCH="$(dpkg --print-architecture)" && \
-  UBUNTU_CODENAME="$(grep -oP '(?<=UBUNTU_CODENAME=).*' /etc/os-release)" && \
+  DEBIAN_ARCH="$(dpkg --print-architecture)" ; \
+  UBUNTU_CODENAME="$(grep -oP '(?<=UBUNTU_CODENAME=).*' /etc/os-release)" ; \
   echo "deb [arch=$DEBIAN_ARCH signed-by=/etc/apt/keyrings/hashicorp.gpg] https://apt.releases.hashicorp.com $UBUNTU_CODENAME main" > /apt-config/sources.list.d/hashicorp.list && \
   echo "deb [arch=$DEBIAN_ARCH signed-by=/etc/apt/keyrings/mise.gpg] https://mise.jdx.dev/deb stable main" > /apt-config/sources.list.d/mise.list && \
   echo "deb [arch=$DEBIAN_ARCH signed-by=/etc/apt/keyrings/kubernetes.gpg] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /" > /apt-config/sources.list.d/kubernetes.list
@@ -64,14 +62,13 @@ RUN \
   apt update && \
   apt --no-install-recommends install -y \
     mise && \
-  export MISE_DATA_DIR=/usr/local/share/mise/ ; \
   mkdir /usr/local/share/mise && \
   # All all to read/write, since this is just a dev container
   chmod 777 /usr/local/share/mise
 
 FROM mise AS mise-install-python
 RUN \
-  export MISE_DATA_DIR=/usr/local/share/mise/ ; \
+  export MISE_DATA_DIR=/usr/local/share/mise ; \
   mise install python@3.13.5
 
 # FROM apt-install AS mise-install-java
@@ -79,7 +76,7 @@ RUN \
 
 FROM mise AS mise-install-node
 RUN \
-  export MISE_DATA_DIR=/usr/local/share/mise/ ; \
+  export MISE_DATA_DIR=/usr/local/share/mise ; \
   # Run install twice because first install fails with gpg-agent error. (TODO: Investigate why.)
   mise install node@24.4.1 ; mise install node@24.4.1
 
